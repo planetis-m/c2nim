@@ -36,6 +36,7 @@ type
     pxDirective,              # #define, etc.
     pxDirectiveParLe,         # #define m( with parle (yes, C is that ugly!)
     pxDirConc,                # ##
+    pxToString,               # #tok within a #define (toString operation)
     pxNewLine,                # newline: end of directive
     pxAmp,                    # &
     pxAmpAmp,                 # &&
@@ -106,6 +107,7 @@ type
     base*: NumericalBase      # the numerical base; only valid for int
                               # or float literals
     next*: ref Token          # for C we need arbitrary look-ahead :-(
+    lineNumber*: int          # line number
 
   Lexer* = object of TBaseLexer
     fileIdx*: (when declared(FileIndex): FileIndex else: int32)
@@ -170,7 +172,7 @@ proc tokKindToStr*(k: Tokkind): string =
   of pxStrLit: result = "[string literal]"
   of pxCharLit: result = "[char literal]"
 
-  of pxDirective, pxDirectiveParLe: result = "#"             # #define, etc.
+  of pxDirective, pxDirectiveParLe, pxToString: result = "#"             # #define, etc.
   of pxDirConc: result = "##"
   of pxNewLine: result = "[NewLine]"
   of pxAmp: result = "&"                   # &
@@ -577,8 +579,10 @@ proc scanLineComment(L: var Lexer, tok: var Token) =
   tok.xkind = pxLineComment
   var col = getColNumber(L, pos)
   while true:
-    inc(pos, 2)               # skip //
-    #add(tok.s, '#')
+    # FIXME: this should be inc(pos, 3) to not double count space?
+    inc(pos, 2) # skip //
+    if buf[pos] == '/':
+      inc(pos, 1) # skip /// 
     while buf[pos] notin {CR, LF, nimlexbase.EndOfFile}:
       add(tok.s, buf[pos])
       inc(pos)
@@ -600,6 +604,9 @@ proc scanStarComment(L: var Lexer, tok: var Token) =
   var buf = L.buf
   tok.s = ""
   tok.xkind = pxStarComment
+  # skip initial /** 
+  if buf[pos] == '*' and buf[pos] != '/':
+    inc(pos)
   while true:
     case buf[pos]
     of CR, LF:
@@ -612,7 +619,6 @@ proc scanStarComment(L: var Lexer, tok: var Token) =
       #  */
       let oldPos = pos
       while buf[pos] in {' ', '\t'}:
-        #add(tok.s, ' ')
         inc(pos)
       if buf[pos] == '*':
         if buf[pos+1] != '/':
@@ -749,6 +755,7 @@ proc getTok*(L: var Lexer, tok: var Token) =
   skip(L, tok)
   if tok.xkind == pxNewLine: return
   var c = L.buf[L.bufpos]
+  tok.lineNumber = L.lineNumber
   if c in SymStartChars:
     getSymbol(L, tok)
     if L.buf[L.bufpos] == '"':
